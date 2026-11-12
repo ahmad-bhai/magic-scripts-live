@@ -3,7 +3,9 @@
   "rewrites": [
     { "source": "/s", "destination": "/api/s.js" },
     { "source": "/s/", "destination": "/api/s.js" },
+    { "source": "/api/s", "destination": "/api/s.js" },
     { "source": "/keys", "destination": "/api/keys.js" },
-    { "source": "/keys/", "destination": "/api/keys.js" }
+    { "source": "/keys/", "destination": "/api/keys.js" },
+    { "source": "/api/keys", "destination": "/api/keys.js" }
   ]
 }

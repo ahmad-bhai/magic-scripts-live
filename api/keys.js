@@ -5,12 +5,12 @@ const app = express();
 
 app.use(express.json());
 
-const FIREBASE_DB_URL = "https://reactions-maker-site-default-rtdb.firebaseio.com/apis.json";
+const FIREBASE_DB_URL = "https://reactions-maker-site-default-rtdb.firebaseio.com";
 
-// Helper function to make HTTP requests to Firebase
+// Helper function for Firebase HTTP requests
 function firebaseRequest(method, path = "", data = null) {
     return new Promise((resolve, reject) => {
-        const targetUrl = `https://reactions-maker-site-default-rtdb.firebaseio.com${path}.json`;
+        const targetUrl = `${FIREBASE_DB_URL}${path}.json`;
         const urlObj = new URL(targetUrl);
         
         const options = {
@@ -38,13 +38,11 @@ function firebaseRequest(method, path = "", data = null) {
     });
 }
 
-// Helper to hash password for secure storage lookup
 function hashPassword(password) {
     return crypto.createHash('sha256').update(password).digest('hex');
 }
 
 const handleKeyManagement = async (req, res) => {
-    // Enable CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -65,10 +63,9 @@ const handleKeyManagement = async (req, res) => {
     const hashedPassword = hashPassword(password);
 
     try {
-        // Fetch existing user record from Firebase
         const userRecord = await firebaseRequest("GET", `/users/${userKeyId}`);
 
-        // 1. LOGIN / AUTHENTICATION
+        // 1. AUTHENTICATION / LOGIN
         if (action === "auth") {
             if (userRecord) {
                 if (userRecord.passwordHash !== hashedPassword) {
@@ -80,7 +77,6 @@ const handleKeyManagement = async (req, res) => {
                     keys: userRecord.keys ? Object.values(userRecord.keys) : []
                 });
             } else {
-                // Register new user account
                 const newUser = {
                     email: email,
                     passwordHash: hashedPassword,

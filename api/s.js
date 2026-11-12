@@ -1,21 +1,42 @@
-// Express & Node.js Dependency setup
 const express = require('express');
 const WebSocket = require('ws');
+const https = require('https');
 const app = express();
 
-// Global active WebSockets cache taaki baar-baar connection na khule
 const activeSockets = {};
-
-// Buffer to hold latest ticks/prices per pair
 const priceBuffers = {};
 
-// In-Memory Database / Storage Simulation for Keys (Production me ise Database ya JSON file se replace karein)
-global.validKeys = global.validKeys || {
-    "Ahmad Bhai00": { status: "active" }
-};
-global.deletedKeys = global.deletedKeys || {};
+const FIREBASE_DB_URL = "https://reactions-maker-site-default-rtdb.firebaseio.com";
 
-// Simple Technical Analysis: RSI Calculation
+// Helper function to check if a key exists in Firebase database across all users
+async function verifyApiKeyInDatabase(apiKey) {
+    if (apiKey === "Ahmad Bhai00") return true; // Default fallback key
+
+    return new Promise((resolve) => {
+        const url = `${FIREBASE_DB_URL}/users.json`;
+        https.get(url, (res) => {
+            let body = '';
+            res.on('data', (chunk) => body += chunk);
+            res.on('end', () => {
+                try {
+                    const users = JSON.parse(body);
+                    if (!users) return resolve(false);
+
+                    for (let userId in users) {
+                        const user = users[userId];
+                        if (user && user.keys && user.keys[apiKey]) {
+                            return resolve(true);
+                        }
+                    }
+                    resolve(false);
+                } catch (e) {
+                    resolve(false);
+                }
+            });
+        }).on('error', () => resolve(false));
+    });
+}
+
 function calculateRSI(prices, period = 14) {
     if (prices.length < period + 1) return 50; 
     let gains = 0, losses = 0;
@@ -34,7 +55,6 @@ function calculateRSI(prices, period = 14) {
     return 100 - (100 / (1 + rs));
 }
 
-// Simple Moving Average (SMA) Calculation
 function calculateSMA(prices, period = 5) {
     if (prices.length < period) return prices[prices.length - 1] || 0;
     const slice = prices.slice(-period);
@@ -42,13 +62,11 @@ function calculateSMA(prices, period = 5) {
     return sum / period;
 }
 
-// Random Accuracy Generator (81% to 96%)
 function getRandomAccuracy() {
     const randomAcc = Math.floor(Math.random() * (96 - 81 + 1)) + 81;
     return `${randomAcc}%`;
 }
 
-// Live Signal Evaluator Engine
 function generateLiveSignal(symbol, timeframe) {
     const prices = priceBuffers[symbol] || [];
     
@@ -94,13 +112,12 @@ function generateLiveSignal(symbol, timeframe) {
     };
 }
 
-// Dynamic WebSocket Connection & Feed Handler
 function initQuotexSocket(customWsUrl) {
     const defaultWsUrl = 'wss://ws2.market-qx.trade/socket.io/?EIO=3&transport=websocket';
     const wsUrl = customWsUrl || defaultWsUrl;
 
     if (activeSockets[wsUrl] && activeSockets[wsUrl].readyState === WebSocket.OPEN) {
-        return; // Already connected
+        return;
     }
 
     try {
@@ -140,11 +157,9 @@ function initQuotexSocket(customWsUrl) {
     } catch (err) {}
 }
 
-// Initial default activation
 initQuotexSocket();
 
-// Route Endpoint Handler function
-const handleSignalRequest = (req, res) => {
+const handleSignalRequest = async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -154,27 +169,22 @@ const handleSignalRequest = (req, res) => {
         return res.status(200).end();
     }
 
-    // 1. Key Verification Logic
     const userKey = req.query.key;
     if (!userKey) {
         return res.status(401).json({ status: "error", message: "valid key is required" });
     }
 
-    if (global.deletedKeys && global.deletedKeys[userKey]) {
-        return res.status(403).json({ status: "error", message: "deleted key" });
-    }
-
-    if (!global.validKeys || !global.validKeys[userKey]) {
+    // Verify key against Firebase database
+    const isValid = await verifyApiKeyInDatabase(userKey);
+    if (!isValid) {
         return res.status(403).json({ status: "error", message: "invalid key" });
     }
 
-    // 2. Dynamic WebSocket URL support via query parameter (wsurl)
     const customWsUrl = req.query.wsurl || req.query.url;
     if (customWsUrl) {
         initQuotexSocket(decodeURIComponent(customWsUrl));
     }
 
-    // 3. Parameters extraction (pair & timeframe)
     const pairParam = req.query.pair || req.query.symbol || 'eurusd_otc';
     const cleanPair = pairParam.toLowerCase().replace(/[^a-z0-9]/g, '');
     const timeframe = (req.query.tf || req.query.time || '1M').toUpperCase();
@@ -187,7 +197,6 @@ const handleSignalRequest = (req, res) => {
     });
 };
 
-// Route Definitions
 app.get('/api/s.js', handleSignalRequest);
 app.get('/s', handleSignalRequest);
 app.get('/s/', handleSignalRequest);

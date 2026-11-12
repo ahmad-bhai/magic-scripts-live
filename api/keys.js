@@ -1,15 +1,49 @@
-// Express setup for Key Management
 const express = require('express');
 const crypto = require('crypto');
+const https = require('https');
 const app = express();
 
-// Shared global storage across serverless functions execution context
-global.validKeys = global.validKeys || {
-    "Ahmad Bhai00": { status: "active" }
-};
-global.deletedKeys = global.deletedKeys || {};
+app.use(express.json());
 
-const handleKeyManagement = (req, res) => {
+const FIREBASE_DB_URL = "https://reactions-maker-site-default-rtdb.firebaseio.com/apis.json";
+
+// Helper function to make HTTP requests to Firebase
+function firebaseRequest(method, path = "", data = null) {
+    return new Promise((resolve, reject) => {
+        const targetUrl = `https://reactions-maker-site-default-rtdb.firebaseio.com${path}.json`;
+        const urlObj = new URL(targetUrl);
+        
+        const options = {
+            hostname: urlObj.hostname,
+            path: urlObj.pathname + urlObj.search,
+            method: method,
+            headers: { 'Content-Type': 'application/json' }
+        };
+
+        const req = https.request(options, (res) => {
+            let body = '';
+            res.on('data', (chunk) => body += chunk);
+            res.on('end', () => {
+                try {
+                    resolve(body ? JSON.parse(body) : null);
+                } catch (e) {
+                    resolve(null);
+                }
+            });
+        });
+
+        req.on('error', (err) => reject(err));
+        if (data) req.write(JSON.stringify(data));
+        req.end();
+    });
+}
+
+// Helper to hash password for secure storage lookup
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+const handleKeyManagement = async (req, res) => {
     // Enable CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -19,59 +53,99 @@ const handleKeyManagement = (req, res) => {
         return res.status(200).end();
     }
 
-    // 1. Handle Add Query: url/keys/add=true or url/keys?add=true
-    const addParam = req.query.add;
-    if (addParam !== undefined) {
-        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-        
-        if (addParam === 'true' || addParam === '') {
-            // Generate a secure unique random API Key
-            const newKey = 'KEY_' + crypto.randomBytes(6).toString('hex').toUpperCase();
-            global.validKeys[newKey] = { status: "active", createdAt: new Date().toISOString() };
-            return res.status(200).send(`New API Key Generated Successfully: ${newKey}`);
-        } else {
-            return res.status(200).send("Okay false not generated");
-        }
+    const action = req.query.action || req.body.action;
+    const email = (req.query.email || req.body.email || "").toLowerCase().trim();
+    const password = req.query.password || req.body.password || "";
+
+    if (!email || !password) {
+        return res.status(400).json({ status: "error", message: "Email and password are required." });
     }
 
-    // 2. Handle Delete Query: url/keys/delete={key} or url/keys?delete={key}
-    const deleteParam = req.query.delete;
-    if (deleteParam !== undefined) {
-        res.setHeader('Content-Type', 'application/json');
-        const targetKey = decodeURIComponent(deleteParam);
+    const userKeyId = crypto.createHash('md5').update(email).digest('hex');
+    const hashedPassword = hashPassword(password);
 
-        if (global.validKeys[targetKey]) {
-            delete global.validKeys[targetKey];
-            global.deletedKeys[targetKey] = { deletedAt: new Date().toISOString() };
+    try {
+        // Fetch existing user record from Firebase
+        const userRecord = await firebaseRequest("GET", `/users/${userKeyId}`);
+
+        // 1. LOGIN / AUTHENTICATION
+        if (action === "auth") {
+            if (userRecord) {
+                if (userRecord.passwordHash !== hashedPassword) {
+                    return res.status(401).json({ status: "error", message: "Incorrect password! Please check your credentials." });
+                }
+                return res.status(200).json({
+                    status: "success",
+                    message: "Login successful",
+                    keys: userRecord.keys ? Object.values(userRecord.keys) : []
+                });
+            } else {
+                // Register new user account
+                const newUser = {
+                    email: email,
+                    passwordHash: hashedPassword,
+                    createdAt: new Date().toISOString(),
+                    keys: {}
+                };
+                await firebaseRequest("PUT", `/users/${userKeyId}`, newUser);
+                return res.status(200).json({
+                    status: "success",
+                    message: "Account created and synced successfully",
+                    keys: []
+                });
+            }
+        }
+
+        // 2. ADD NEW API KEY
+        if (action === "add") {
+            if (!userRecord || userRecord.passwordHash !== hashedPassword) {
+                return res.status(401).json({ status: "error", message: "Unauthorized access or incorrect password." });
+            }
+
+            const newApiKey = 'KEY_' + crypto.randomBytes(6).toString('hex').toUpperCase();
+            const fullUrl = `https://magic-scripts-live.vercel.app/s?pair=eurusd_otc&tf=1M&key=${newApiKey}`;
+            
+            const keyObj = {
+                key: newApiKey,
+                url: fullUrl,
+                createdAt: new Date().toISOString()
+            };
+
+            await firebaseRequest("PUT", `/users/${userKeyId}/keys/${newApiKey}`, keyObj);
+
+            return res.status(200).json({
+                status: "success",
+                message: "API Key generated successfully",
+                keyData: keyObj
+            });
+        }
+
+        // 3. DELETE API KEY
+        if (action === "delete") {
+            const targetKey = req.query.key || req.body.key;
+            if (!userRecord || userRecord.passwordHash !== hashedPassword) {
+                return res.status(401).json({ status: "error", message: "Unauthorized access." });
+            }
+
+            await firebaseRequest("DELETE", `/users/${userKeyId}/keys/${targetKey}`);
+
             return res.status(200).json({
                 status: "success",
                 message: `${targetKey} has been deleted permanently!`
             });
-        } else if (global.deletedKeys[targetKey]) {
-            return res.status(400).json({
-                status: "error",
-                message: `${targetKey} is already deleted!`
-            });
-        } else {
-            return res.status(404).json({
-                status: "error",
-                message: `Key '${targetKey}' not found!`
-            });
         }
-    }
 
-    // Default Fallback Info Response
-    res.setHeader('Content-Type', 'application/json');
-    return res.status(200).json({
-        status: "success",
-        message: "Key Management API is running. Use ?add=true, ?add=false, or ?delete=KEY_NAME"
-    });
+        return res.status(400).json({ status: "error", message: "Invalid action specified." });
+
+    } catch (err) {
+        return res.status(500).json({ status: "error", message: "Internal server error connecting to database." });
+    }
 };
 
-// Route definitions supporting Vercel and direct routing
 app.get('/api/keys', handleKeyManagement);
+app.post('/api/keys', handleKeyManagement);
 app.get('/keys', handleKeyManagement);
-app.get('/keys/', handleKeyManagement);
+app.post('/keys', handleKeyManagement);
 
 module.exports = app;
 module.exports.default = handleKeyManagement;
